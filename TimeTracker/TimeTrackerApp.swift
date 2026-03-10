@@ -7,6 +7,11 @@
 
 import SwiftUI
 import SwiftData
+import os
+
+private let logger = Logger(
+    subsystem: "com.eugenechan.TimeTracker", category: "App"
+)
 
 @main
 struct TimeTrackerApp: App {
@@ -18,8 +23,7 @@ struct TimeTrackerApp: App {
         ])
         let modelConfiguration = ModelConfiguration(
             schema: schema,
-            isStoredInMemoryOnly: false,
-            cloudKitDatabase: .automatic
+            isStoredInMemoryOnly: false
         )
 
         do {
@@ -39,6 +43,9 @@ struct TimeTrackerApp: App {
         #else
         WindowGroup {
             ContentView()
+                .onOpenURL { url in
+                    handleDeepLink(url)
+                }
         }
         .modelContainer(sharedModelContainer)
         #endif
@@ -52,5 +59,27 @@ struct TimeTrackerApp: App {
                 await NotificationManager.shared.scheduleNotifications(for: .now)
             }
         }
+        // Start Convex real-time sync
+        ConvexSyncService.shared.start(container: sharedModelContainer)
     }
+
+    #if os(iOS)
+    private func handleDeepLink(_ url: URL) {
+        // Handle timetracker://slot/{timestamp}
+        guard url.scheme == "timetracker",
+              url.host == "slot",
+              let timestampStr = url.pathComponents.dropFirst().first,
+              let timestamp = TimeInterval(timestampStr) else {
+            logger.warning("Invalid deep link: \(url.absoluteString)")
+            return
+        }
+
+        let slotStartDate = Date(timeIntervalSince1970: timestamp)
+        let slots = SlotManager.slotsForDate(slotStartDate)
+        if let slot = slots.first(where: { abs($0.start.timeIntervalSince(slotStartDate)) < 1 }) {
+            logger.info("Deep link navigating to slot: \(slot.label)")
+            notificationManager.pendingSlot = slot
+        }
+    }
+    #endif
 }

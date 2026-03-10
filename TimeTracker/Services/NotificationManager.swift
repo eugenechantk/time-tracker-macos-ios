@@ -95,14 +95,17 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     }
 
     // Called when user taps a notification
+    // Uses completion handler version instead of async to avoid UIKit threading crash
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse
-    ) async {
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
         let userInfo = response.notification.request.content.userInfo
         let key = "slotStart"
         guard let slotStartInterval = userInfo[key] as? TimeInterval else {
             logger.warning("Notification tapped but no slotStart in userInfo")
+            completionHandler()
             return
         }
 
@@ -111,13 +114,14 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         if let slot = slots.first(where: { abs($0.start.timeIntervalSince(slotStartDate)) < 1 }) {
             let slotLabel = slot.label
             logger.info("Notification tapped for slot: \(slotLabel)")
-            await MainActor.run {
+            DispatchQueue.main.async {
                 self.pendingSlot = slot
                 #if os(macOS)
                 self.openMenuBarPopover()
                 #endif
             }
         }
+        completionHandler()
     }
 
     #if DEBUG
@@ -152,8 +156,9 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     // Show notification even when app is in foreground
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification
-    ) async -> UNNotificationPresentationOptions {
-        return [.banner, .sound]
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
     }
 }

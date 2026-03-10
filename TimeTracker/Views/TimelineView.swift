@@ -1,20 +1,27 @@
 import SwiftUI
 import SwiftData
+import os
+
+private let logger = Logger(
+    subsystem: "com.eugenechan.TimeTracker", category: "TimelineView"
+)
 
 struct TimelineView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query private var entries: [TimeEntry]
+    @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var syncService = ConvexSyncService.shared
     @Binding var selectedSlot: TimeSlot?
     @State private var selectedDate: Date = .now
+    @State private var entries: [TimeEntry] = []
 
     private var slots: [TimeSlot] {
         SlotManager.slotsForDate(selectedDate)
     }
 
     private var entriesBySlotStart: [Date: TimeEntry] {
-        Dictionary(uniqueKeysWithValues: entries.compactMap { entry in
-            (entry.slotStart, entry)
-        })
+        // Use grouping to handle potential duplicates safely
+        Dictionary(grouping: entries, by: { $0.slotStart })
+            .compactMapValues { $0.sorted { $0.submittedAt > $1.submittedAt }.first }
     }
 
     private var isToday: Bool {
@@ -34,6 +41,32 @@ struct TimelineView: View {
             titleHeader
             dateHeader
             slotList
+        }
+        .onAppear { fetchEntries(fromRemote: true) }
+        .onChange(of: selectedDate) { fetchEntries(fromRemote: true) }
+        .onChange(of: syncService.refreshID) { fetchEntries(fromRemote: false) }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                fetchEntries(fromRemote: true)
+            }
+        }
+    }
+
+    private func fetchEntries(fromRemote: Bool = true) {
+        do {
+            let context: ModelContext
+            if fromRemote {
+                // Fresh context to pick up changes merged by ConvexSyncService
+                context = ModelContext(modelContext.container)
+            } else {
+                // Main context already has local saves — instant optimistic update
+                context = modelContext
+            }
+            let descriptor = FetchDescriptor<TimeEntry>()
+            entries = try context.fetch(descriptor)
+            logger.debug("Fetched \(entries.count) entries (remote: \(fromRemote))")
+        } catch {
+            logger.error("Failed to fetch entries: \(error.localizedDescription)")
         }
     }
 

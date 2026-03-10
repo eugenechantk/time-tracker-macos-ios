@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		5D54297A2F602B4800480630 /* ConvexMobile in Frameworks */ = {isa = PBXBuildFile; productRef = 5DA00002000000000000BBBB /* ConvexMobile */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		5DFAEDEC2F5F205800F3DACD /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -65,6 +69,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5D54297A2F602B4800480630 /* ConvexMobile in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -125,6 +130,7 @@
 			);
 			name = TimeTracker;
 			packageProductDependencies = (
+				5DA00002000000000000BBBB /* ConvexMobile */,
 			);
 			productName = TimeTracker;
 			productReference = 5DFAEDDC2F5F205700F3DACD /* TimeTracker.app */;
@@ -208,6 +214,9 @@
 			);
 			mainGroup = 5DFAEDD32F5F205700F3DACD;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5DA00001000000000000AAAA /* XCRemoteSwiftPackageReference "convex-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5DFAEDDD2F5F205700F3DACD /* Products */;
 			projectDirPath = "";
@@ -636,6 +645,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		5DA00001000000000000AAAA /* XCRemoteSwiftPackageReference "convex-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/get-convex/convex-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.6.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		5DA00002000000000000BBBB /* ConvexMobile */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5DA00001000000000000AAAA /* XCRemoteSwiftPackageReference "convex-swift" */;
+			productName = ConvexMobile;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 5DFAEDD42F5F205700F3DACD /* Project object */;
 }

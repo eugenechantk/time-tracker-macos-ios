@@ -1,4 +1,9 @@
 import SwiftUI
+import os
+
+private let logger = Logger(
+    subsystem: "com.eugenechan.TimeTracker", category: "ContentView"
+)
 
 struct ContentView: View {
     @ObservedObject var notificationManager = NotificationManager.shared
@@ -13,16 +18,32 @@ struct ContentView: View {
                     SlotEditView(slot: slot)
                 }
         }
+        .onAppear {
+            consumePendingSlot()
+        }
         .onChange(of: notificationManager.pendingSlot) { _, newSlot in
-            if let slot = newSlot {
-                selectedSlot = slot
-                notificationManager.pendingSlot = nil
+            if newSlot != nil {
+                consumePendingSlot()
             }
         }
         #else
         macOSContentView()
         #endif
     }
+
+    #if os(iOS)
+    private func consumePendingSlot() {
+        guard let slot = notificationManager.pendingSlot else { return }
+        logger.info("Navigating to pending slot: \(slot.label)")
+        // First dismiss any existing navigation to avoid stacking
+        selectedSlot = nil
+        // Delay navigation slightly to ensure the NavigationStack is ready
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            self.selectedSlot = slot
+            self.notificationManager.pendingSlot = nil
+        }
+    }
+    #endif
 }
 
 #if os(macOS)
