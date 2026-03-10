@@ -10,11 +10,17 @@ import SwiftData
 
 @main
 struct TimeTrackerApp: App {
+    @StateObject private var notificationManager = NotificationManager.shared
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            TimeEntry.self,
         ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        let modelConfiguration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: false,
+            cloudKitDatabase: .automatic
+        )
 
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
@@ -24,9 +30,27 @@ struct TimeTrackerApp: App {
     }()
 
     var body: some Scene {
+        #if os(macOS)
+        MenuBarExtra("TimeTracker", systemImage: "clock.fill") {
+            ContentView()
+                .modelContainer(sharedModelContainer)
+        }
+        .menuBarExtraStyle(.window)
+        #else
         WindowGroup {
             ContentView()
         }
         .modelContainer(sharedModelContainer)
+        #endif
+    }
+
+    init() {
+        NotificationManager.shared.setup()
+        Task {
+            let granted = await NotificationManager.shared.requestAuthorization()
+            if granted {
+                await NotificationManager.shared.scheduleNotifications(for: .now)
+            }
+        }
     }
 }
