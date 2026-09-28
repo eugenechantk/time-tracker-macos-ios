@@ -1,0 +1,8 @@
+name = "timetracker-sync"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+# Secrets (set with `wrangler secret put <NAME>`, never committed):
+#   DATABASE_URL  Neon pooled connection string for the timetracker project
+#   APP_TOKEN     Bearer token the iOS/macOS app sends; also in TimeTracker/Services/SyncSecrets.swift
