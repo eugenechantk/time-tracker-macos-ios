@@ -14,22 +14,67 @@ private let logger = Logger(
 final class NotificationManager: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationManager()
     static let slotStartKey = "slotStart"
+    private static let slotNotificationPrefix = "slot-"
 
     @Published var pendingSlot: TimeSlot?
 
     #if os(macOS)
-    /// Opens the MenuBarExtra popover by showing its window directly
+    /// Opens the MenuBarExtra popover.
+    ///
+    /// SwiftUI creates the popover window lazily, on the first click of the menu bar icon,
+    /// so until then there is nothing to show. In that case we click the icon open and shut
+    /// to create the window, then show it directly like an existing one. We don't leave it
+    /// open from the click: a popover SwiftUI opened itself often closes again as the
+    /// notification banner is dismissed, while one shown directly stays up.
     func openMenuBarPopover() {
         NSApp.activate(ignoringOtherApps: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            for window in NSApp.windows {
-                let className = NSStringFromClass(type(of: window))
-                if className.contains("MenuBarExtraWindow") {
-                    window.makeKeyAndOrderFront(nil)
-                    return
-                }
+            if let popover = Self.window(classNameContaining: "MenuBarExtraWindow") {
+                logger.info("Showing existing popover window")
+                popover.makeKeyAndOrderFront(nil)
+            } else if let button = Self.statusItemButton() {
+                logger.info("No popover window yet — creating it via the status item")
+                button.performClick(nil)
+                button.performClick(nil)
+                Self.showPopoverOnceHidden()
+            } else {
+                logger.error("Could not open menu bar popover: no status item or popover window")
             }
         }
+    }
+
+    /// Shows the new popover window once SwiftUI's close has finished (waits up to ~1s).
+    private static func showPopoverOnceHidden(attemptsLeft: Int = 20) {
+        guard let popover = window(classNameContaining: "MenuBarExtraWindow") else {
+            logger.error("Status item click did not create the popover window")
+            return
+        }
+        if popover.isVisible, attemptsLeft > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                showPopoverOnceHidden(attemptsLeft: attemptsLeft - 1)
+            }
+            return
+        }
+        popover.makeKeyAndOrderFront(nil)
+    }
+
+    private static func window(classNameContaining name: String) -> NSWindow? {
+        NSApp.windows.first { NSStringFromClass(type(of: $0)).contains(name) }
+    }
+
+    private static func statusItemButton() -> NSStatusBarButton? {
+        guard let contentView = window(classNameContaining: "NSStatusBarWindow")?.contentView else {
+            return nil
+        }
+        return firstSubview(ofType: NSStatusBarButton.self, in: contentView)
+    }
+
+    private static func firstSubview<T: NSView>(ofType type: T.Type, in view: NSView) -> T? {
+        if let match = view as? T { return match }
+        for subview in view.subviews {
+            if let match = firstSubview(ofType: type, in: subview) { return match }
+        }
+        return nil
     }
     #endif
 
@@ -53,45 +98,41 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         }
     }
 
-    func scheduleNotifications(for date: Date) async {
+    /// Schedule notifications for today and the next 2 days.
+    /// This ensures notifications survive overnight even if the app is killed.
+    /// iOS allows up to 64 pending local notifications; 3 days × 33 slots = 99,
+    /// but we only schedule future slots so it stays well under the limit.
+    func scheduleAllNotifications() async {
         let center = UNUserNotificationCenter.current()
-        center.removeAllPendingNotificationRequests()
+        let desiredRequests = Self.notificationRequests(startingAt: .now)
+        let desiredIDs = Set(desiredRequests.map(\.identifier))
+        let pendingRequests = await center.pendingNotificationRequests()
+        let pendingIDs = Set(pendingRequests.map(\.identifier))
 
-        let slots = SlotManager.slotsForDate(date)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
+        let obsoleteSlotIDs = pendingIDs.filter {
+            $0.hasPrefix(Self.slotNotificationPrefix) && !desiredIDs.contains($0)
+        }
+        if !obsoleteSlotIDs.isEmpty {
+            center.removePendingNotificationRequests(withIdentifiers: Array(obsoleteSlotIDs))
+        }
 
-        let key = NotificationManager.slotStartKey
+        let missingRequests = desiredRequests.filter { !pendingIDs.contains($0.identifier) }
+        guard !missingRequests.isEmpty || !obsoleteSlotIDs.isEmpty else {
+            logger.debug("Notification schedule already current")
+            return
+        }
 
-        let now = Date.now
-        for slot in slots {
-            // Only schedule notifications for future slot endings
-            guard slot.end > now else { continue }
-
-            let content = UNMutableNotificationContent()
-            let startLabel = formatter.string(from: slot.start)
-            let endLabel = formatter.string(from: slot.end)
-            content.title = "What were you doing?"
-            content.body = "\(startLabel) - \(endLabel)"
-            content.sound = .default
-            content.userInfo = [key: slot.start.timeIntervalSince1970]
-
-            let triggerDate = Calendar.current.dateComponents(
-                [.year, .month, .day, .hour, .minute], from: slot.end
-            )
-            let trigger = UNCalendarNotificationTrigger(dateMatching: triggerDate, repeats: false)
-
-            let id = "slot-\(Int(slot.start.timeIntervalSince1970))"
-            let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
-
+        var scheduledCount = 0
+        for request in missingRequests {
             do {
                 try await center.add(request)
+                scheduledCount += 1
             } catch {
                 logger.error("Failed to schedule notification: \(error.localizedDescription)")
             }
         }
 
-        logger.info("Scheduled \(slots.count) notifications for \(date)")
+        logger.info("Scheduled \(scheduledCount) notifications; removed \(obsoleteSlotIDs.count) stale notifications")
     }
 
     // Called when user taps a notification
@@ -129,6 +170,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     func scheduleTestNotification() async {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: ["test-notification"])
+        center.removeDeliveredNotifications(withIdentifiers: ["test-notification"])
 
         let slots = SlotManager.slotsForDate(.now)
         guard let slot = slots.last(where: { $0.end <= .now }) ?? slots.first else { return }
@@ -160,5 +202,40 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .sound])
+    }
+
+    private static func notificationRequests(startingAt now: Date) -> [UNNotificationRequest] {
+        let calendar = Calendar.current
+        let timeFormat = Date.FormatStyle.dateTime
+            .hour(.defaultDigits(amPM: .abbreviated))
+            .minute(.twoDigits)
+        let key = NotificationManager.slotStartKey
+        var requests: [UNNotificationRequest] = []
+        requests.reserveCapacity(64)
+
+        for dayOffset in 0..<3 {
+            guard let date = calendar.date(byAdding: .day, value: dayOffset, to: now) else { continue }
+            let slots = SlotManager.slotsForDate(date)
+
+            for slot in slots {
+                guard slot.end > now else { continue }
+                guard requests.count < 64 else { return requests }
+
+                let content = UNMutableNotificationContent()
+                content.title = "What were you doing?"
+                content.body = "\(slot.start.formatted(timeFormat)) - \(slot.end.formatted(timeFormat))"
+                content.sound = .default
+                content.userInfo = [key: slot.start.timeIntervalSince1970]
+
+                let triggerDate = calendar.dateComponents(
+                    [.year, .month, .day, .hour, .minute], from: slot.end
+                )
+                let trigger = UNCalendarNotificationTrigger(dateMatching: triggerDate, repeats: false)
+                let id = "\(slotNotificationPrefix)\(Int(slot.start.timeIntervalSince1970))"
+                requests.append(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
+            }
+        }
+
+        return requests
     }
 }
