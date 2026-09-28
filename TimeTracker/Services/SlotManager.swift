@@ -7,12 +7,16 @@ struct TimeSlot: Identifiable, Equatable, Hashable {
     var id: Date { start }
 
     var label: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        let startStr = formatter.string(from: start)
-        let endStr = formatter.string(from: end)
+        let startStr = Self.labelFormatter.string(from: start)
+        let endStr = Self.labelFormatter.string(from: end)
         return "\(startStr) - \(endStr)"
     }
+
+    private static let labelFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        return formatter
+    }()
 }
 
 enum SlotManager {
