@@ -59,7 +59,7 @@ The repo is public, so nothing secret is committed:
 
 ```bash
 cd sync-api
-pnpm install --ignore-workspace
+pnpm install
 pnpm test                      # handler unit tests (no database)
 wrangler deploy                # deploy the Worker
 psql "$DATABASE_URL" -f schema.sql   # once, on a new Neon project
