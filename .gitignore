@@ -15,3 +15,7 @@ fastlane/test_output/
 
 # --- Sync API secrets (public repo) ---
 TimeTracker/Services/SyncSecrets.swift
+
+# --- Verification evidence (screenshots/logs contain real timeline entries; public repo) ---
+.claude/feature/evidence/
+.claude/evidence/
