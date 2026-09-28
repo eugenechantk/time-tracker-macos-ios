@@ -104,8 +104,10 @@ struct TimeEntryTests {
 
     @Test func timeEntryCreation() {
         let now = Date()
+        let end = now.addingTimeInterval(1800)
         let entry = TimeEntry(slotStart: now, entryDescription: "Test entry")
         #expect(entry.slotStart == now)
+        #expect(entry.slotEnd == end)
         #expect(entry.entryDescription == "Test entry")
         #expect(entry.id != UUID()) // has a valid UUID
     }
