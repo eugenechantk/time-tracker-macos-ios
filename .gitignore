@@ -19,3 +19,6 @@ TimeTracker/Services/SyncSecrets.swift
 # --- Verification evidence (screenshots/logs contain real timeline entries; public repo) ---
 .claude/feature/evidence/
 .claude/evidence/
+
+# --- Supabase CLI local state (legacy backend) ---
+supabase/.temp/
