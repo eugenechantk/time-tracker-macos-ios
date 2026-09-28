@@ -6,10 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		5D54297A2F602B4800480630 /* ConvexMobile in Frameworks */ = {isa = PBXBuildFile; productRef = 5DA00002000000000000BBBB /* ConvexMobile */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXContainerItemProxy section */
 		5DFAEDEC2F5F205800F3DACD /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -54,11 +50,15 @@
 		};
 		5DFAEDEE2F5F205800F3DACD /* TimeTrackerTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = TimeTrackerTests;
 			sourceTree = "<group>";
 		};
 		5DFAEDF82F5F205800F3DACD /* TimeTrackerUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = TimeTrackerUITests;
 			sourceTree = "<group>";
 		};
@@ -69,7 +69,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				5D54297A2F602B4800480630 /* ConvexMobile in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -130,7 +129,6 @@
 			);
 			name = TimeTracker;
 			packageProductDependencies = (
-				5DA00002000000000000BBBB /* ConvexMobile */,
 			);
 			productName = TimeTracker;
 			productReference = 5DFAEDDC2F5F205700F3DACD /* TimeTracker.app */;
@@ -153,8 +151,6 @@
 				5DFAEDEE2F5F205800F3DACD /* TimeTrackerTests */,
 			);
 			name = TimeTrackerTests;
-			packageProductDependencies = (
-			);
 			productName = TimeTrackerTests;
 			productReference = 5DFAEDEB2F5F205800F3DACD /* TimeTrackerTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -176,8 +172,6 @@
 				5DFAEDF82F5F205800F3DACD /* TimeTrackerUITests */,
 			);
 			name = TimeTrackerUITests;
-			packageProductDependencies = (
-			);
 			productName = TimeTrackerUITests;
 			productReference = 5DFAEDF52F5F205800F3DACD /* TimeTrackerUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
@@ -215,7 +209,6 @@
 			mainGroup = 5DFAEDD32F5F205700F3DACD;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				5DA00001000000000000AAAA /* XCRemoteSwiftPackageReference "convex-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5DFAEDDD2F5F205700F3DACD /* Products */;
@@ -422,6 +415,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = TimeTracker/Info.plist;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSUIElement = YES;
 				"INFOPLIST_KEY_LSUIElement[sdk=macosx*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -470,6 +464,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = TimeTracker/Info.plist;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSUIElement = YES;
 				"INFOPLIST_KEY_LSUIElement[sdk=macosx*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -646,24 +641,6 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		5DA00001000000000000AAAA /* XCRemoteSwiftPackageReference "convex-swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/get-convex/convex-swift";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.6.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		5DA00002000000000000BBBB /* ConvexMobile */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5DA00001000000000000AAAA /* XCRemoteSwiftPackageReference "convex-swift" */;
-			productName = ConvexMobile;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 5DFAEDD42F5F205700F3DACD /* Project object */;
 }

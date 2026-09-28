@@ -1,5 +1,8 @@
 import SwiftUI
 import os
+#if os(macOS)
+import AppKit
+#endif
 
 private let logger = Logger(
     subsystem: "com.eugenechan.TimeTracker", category: "ContentView"
@@ -92,6 +95,12 @@ struct macOSContentView: View {
             .padding(.vertical, 8)
         }
         .frame(width: 360, height: 500)
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
+            guard let window = notification.object as? NSWindow,
+                  NSStringFromClass(type(of: window)).contains("MenuBarExtraWindow") else { return }
+            logger.info("Popover became visible — refreshing from sync API")
+            SyncService.shared.refreshFromRemote()
+        }
     }
 }
 #endif

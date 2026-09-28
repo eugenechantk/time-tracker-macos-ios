@@ -9,25 +9,18 @@ final class TimeTrackerUITests: XCTestCase {
         app = XCUIApplication()
         app.launchArguments = ["--uitesting"]
         app.launch()
-
-        // Handle notification permission alert
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let allowButton = springboard.buttons["Allow"]
-        if allowButton.waitForExistence(timeout: 2) {
-            allowButton.tap()
-        }
     }
 
     @MainActor
     func testTimelineShowsSlots() throws {
-        let firstSlot = app.staticTexts["7:30 AM - 8:00 AM"]
-        XCTAssertTrue(firstSlot.waitForExistence(timeout: 5), "First slot should be visible")
+        let firstSlot = findSlot("7:30 AM - 8:00 AM")
+        XCTAssertTrue(firstSlot.exists, "First slot should be visible")
     }
 
     @MainActor
     func testTapSlotNavigatesToEdit() throws {
-        let firstSlot = app.staticTexts["7:30 AM - 8:00 AM"]
-        XCTAssertTrue(firstSlot.waitForExistence(timeout: 5))
+        let firstSlot = findSlot("7:30 AM - 8:00 AM")
+        XCTAssertTrue(firstSlot.exists)
         firstSlot.tap()
 
         let logEntryTitle = app.navigationBars["Log Entry"]
@@ -37,8 +30,8 @@ final class TimeTrackerUITests: XCTestCase {
     @MainActor
     func testSubmitEntry() throws {
         // Navigate to a slot that won't have prior data (use a later slot)
-        let slot = app.staticTexts["8:00 AM - 8:30 AM"]
-        XCTAssertTrue(slot.waitForExistence(timeout: 5))
+        let slot = findSlot("8:00 AM - 8:30 AM")
+        XCTAssertTrue(slot.exists)
         slot.tap()
 
         let field = app.textFields["entryTextField"]
@@ -50,6 +43,7 @@ final class TimeTrackerUITests: XCTestCase {
         XCTAssertTrue(submitButton.waitForExistence(timeout: 3))
         submitButton.tap()
 
+        XCTAssertTrue(findSlot("8:00 AM - 8:30 AM").exists)
         let entryText = app.staticTexts["Test entry from UI test"]
         XCTAssertTrue(entryText.waitForExistence(timeout: 5), "Submitted entry should appear in timeline")
     }
@@ -57,8 +51,8 @@ final class TimeTrackerUITests: XCTestCase {
     @MainActor
     func testEditShowsUpdateButton() throws {
         // First submit
-        let slot = app.staticTexts["8:30 AM - 9:00 AM"]
-        XCTAssertTrue(slot.waitForExistence(timeout: 5))
+        let slot = findSlot("8:30 AM - 9:00 AM")
+        XCTAssertTrue(slot.exists)
         slot.tap()
 
         let field = app.textFields["entryTextField"]
@@ -87,14 +81,30 @@ final class TimeTrackerUITests: XCTestCase {
 
     @MainActor
     func testBackNavigationFromEdit() throws {
-        let firstSlot = app.staticTexts["7:30 AM - 8:00 AM"]
-        XCTAssertTrue(firstSlot.waitForExistence(timeout: 5))
+        let firstSlot = findSlot("7:30 AM - 8:00 AM")
+        XCTAssertTrue(firstSlot.exists)
         firstSlot.tap()
 
         let backButton = app.navigationBars.buttons.firstMatch
         XCTAssertTrue(backButton.waitForExistence(timeout: 3))
         backButton.tap()
 
-        XCTAssertTrue(firstSlot.waitForExistence(timeout: 3), "Should be back on timeline")
+        XCTAssertTrue(findSlot("7:30 AM - 8:00 AM").exists, "Should be back on timeline")
+    }
+
+    private func findSlot(_ label: String) -> XCUIElement {
+        let slot = app.staticTexts[label]
+        if slot.waitForExistence(timeout: 2), slot.isHittable {
+            return slot
+        }
+
+        for _ in 0..<8 {
+            app.swipeDown()
+            if slot.waitForExistence(timeout: 0.5), slot.isHittable {
+                return slot
+            }
+        }
+
+        return slot
     }
 }

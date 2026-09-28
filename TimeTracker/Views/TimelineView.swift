@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import SwiftData
 import os
@@ -7,29 +8,31 @@ private let logger = Logger(
 )
 
 struct TimelineView: View {
-    @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
-    @ObservedObject private var syncService = ConvexSyncService.shared
+    private let syncService = SyncService.shared
+    #if os(macOS)
+    @ObservedObject private var notificationManager = NotificationManager.shared
+    #endif
     @Binding var selectedSlot: TimeSlot?
-    @State private var selectedDate: Date = .now
-    @State private var entries: [TimeEntry] = []
-
-    private var slots: [TimeSlot] {
-        SlotManager.slotsForDate(selectedDate)
-    }
-
-    private var entriesBySlotStart: [Date: TimeEntry] {
-        // Use grouping to handle potential duplicates safely
-        Dictionary(grouping: entries, by: { $0.slotStart })
-            .compactMapValues { $0.sorted { $0.submittedAt > $1.submittedAt }.first }
-    }
+    @State private var selectedDate: Date
+    @State private var slots: [TimeSlot]
+    @State private var entriesBySlotStart: [Date: TimeEntry]
 
     private var isToday: Bool {
         Calendar.current.isDateInToday(selectedDate)
     }
 
-    /// The closest unfilled past slot, or the first upcoming slot if all past slots are filled
-    private var closestOpenSlot: TimeSlot? {
+    /// The slot that should be visible when opening the timeline.
+    /// Today prefers the real current slot, even if it is already filled.
+    private var openingScrollTarget: TimeSlot? {
+        if isToday {
+            let now = Date.now
+            if let currentSlot = slots.first(where: { now >= $0.start && now < $0.end }) {
+                return currentSlot
+            }
+            return slots.first { $0.end > now } ?? slots.last
+        }
+
         let now = Date.now
         let pastUnfilled = slots.filter { $0.end <= now && entriesBySlotStart[$0.start] == nil }
         if let last = pastUnfilled.last { return last }
@@ -42,29 +45,43 @@ struct TimelineView: View {
             dateHeader
             slotList
         }
-        .onAppear { fetchEntries(fromRemote: true) }
-        .onChange(of: selectedDate) { fetchEntries(fromRemote: true) }
-        .onChange(of: syncService.refreshID) { fetchEntries(fromRemote: false) }
+        .onAppear {
+            logger.debug("TimelineView onAppear fired")
+            fetchEntries()
+        }
+        .onChange(of: selectedDate) { _, newDate in fetchEntries(for: newDate) }
+        .onReceive(syncService.$refreshID.dropFirst()) { _ in fetchEntries() }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
-                fetchEntries(fromRemote: true)
+                fetchEntries()
             }
         }
+        #if os(macOS)
+        // MenuBarExtra doesn't reliably fire onAppear when switching if/else branches.
+        // When pendingSlot becomes nil (user navigated back from edit), this view
+        // is now visible — refresh entries to pick up any newly saved data.
+        .onChange(of: notificationManager.pendingSlot) { _, newSlot in
+            if newSlot == nil {
+                logger.debug("pendingSlot cleared — refreshing entries")
+                // Small delay to let SwiftData's persistent store flush
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    fetchEntries()
+                }
+            }
+        }
+        #endif
     }
 
-    private func fetchEntries(fromRemote: Bool = true) {
+    private func fetchEntries() {
+        fetchEntries(for: selectedDate)
+    }
+
+    private func fetchEntries(for date: Date) {
         do {
-            let context: ModelContext
-            if fromRemote {
-                // Fresh context to pick up changes merged by ConvexSyncService
-                context = ModelContext(modelContext.container)
-            } else {
-                // Main context already has local saves — instant optimistic update
-                context = modelContext
-            }
-            let descriptor = FetchDescriptor<TimeEntry>()
-            entries = try context.fetch(descriptor)
-            logger.debug("Fetched \(entries.count) entries (remote: \(fromRemote))")
+            let dayEntries = try Self.fetchEntries(for: date)
+            slots = SlotManager.slotsForDate(date)
+            entriesBySlotStart = Self.indexEntriesBySlotStart(dayEntries)
+            logger.debug("Fetched \(dayEntries.count) entries for selected day")
         } catch {
             logger.error("Failed to fetch entries: \(error.localizedDescription)")
         }
@@ -142,20 +159,67 @@ struct TimelineView: View {
                 .padding(.bottom, 16)
             }
             .onAppear {
-                if let target = closestOpenSlot {
-                    proxy.scrollTo(target.id, anchor: .center)
-                }
+                scrollToOpeningTarget(with: proxy)
             }
             .onChange(of: selectedDate) {
-                if let target = closestOpenSlot {
-                    proxy.scrollTo(target.id, anchor: .center)
+                scrollToOpeningTarget(with: proxy)
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .active {
+                    scrollToOpeningTarget(with: proxy)
                 }
+            }
+            #if os(macOS)
+            .onChange(of: notificationManager.pendingSlot) { _, newSlot in
+                if newSlot == nil {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        scrollToOpeningTarget(with: proxy)
+                    }
+                }
+            }
+            #endif
+        }
+    }
+
+    private func scrollToOpeningTarget(with proxy: ScrollViewProxy) {
+        guard let target = openingScrollTarget else { return }
+        DispatchQueue.main.async {
+            withAnimation(.snappy(duration: 0.2)) {
+                proxy.scrollTo(target.id, anchor: .center)
             }
         }
     }
 
     init(selectedSlot: Binding<TimeSlot?>) {
         _selectedSlot = selectedSlot
+        let initialDate = Date.now
+        let initialEntries = (try? Self.fetchEntries(for: initialDate)) ?? []
+        _selectedDate = State(initialValue: initialDate)
+        _slots = State(initialValue: SlotManager.slotsForDate(initialDate))
+        _entriesBySlotStart = State(initialValue: Self.indexEntriesBySlotStart(initialEntries))
+    }
+
+    private static func fetchEntries(for date: Date) throws -> [TimeEntry] {
+        // Fresh context keeps this view in sync with saves from SlotEditView and sync merges.
+        let context = ModelContext(TimeTrackerApp.sharedModelContainer)
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        let descriptor = FetchDescriptor<TimeEntry>(
+            predicate: #Predicate { entry in
+                entry.slotStart >= dayStart && entry.slotStart < dayEnd
+            },
+            sortBy: [SortDescriptor(\.submittedAt, order: .reverse)]
+        )
+        return try context.fetch(descriptor)
+    }
+
+    private static func indexEntriesBySlotStart(_ entries: [TimeEntry]) -> [Date: TimeEntry] {
+        // Use grouping to handle potential duplicates safely.
+        Dictionary(grouping: entries, by: { $0.slotStart })
+            .compactMapValues { entries in
+                entries.max { $0.submittedAt < $1.submittedAt }
+            }
     }
 }
 
