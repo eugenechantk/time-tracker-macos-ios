@@ -1,0 +1,308 @@
+# CANONICAL Fastfile — house TestFlight standard. Byte-identical across all apps.
+# Per-app config comes from ENV (see .env.default). Do NOT edit per app; edit the
+# template in ~/.claude/skills/testflight-deploy/templates/ and run scaffold --sync-all.
+default_platform(:ios)
+
+def required_env(name)
+  value = ENV[name]
+  UI.user_error!("Missing required environment variable: #{name}") if value.nil? || value.strip.empty?
+  value
+end
+
+def boolean_env(name, default)
+  value = ENV[name]
+  return default if value.nil? || value.strip.empty?
+
+  %w[1 true yes y].include?(value.downcase)
+end
+
+# --- Per-app config (from ENV; set in .env.default) ---
+def app_identifier   = required_env("APP_IDENTIFIER")
+def xcodeproj        = required_env("FASTLANE_PROJECT")      # e.g. "MyApp.xcodeproj"
+def target_name      = required_env("FASTLANE_TARGET")       # e.g. "MyApp"
+def scheme_name      = ENV.fetch("FASTLANE_SCHEME") { target_name }
+def app_name         = ENV["APP_NAME"].to_s.strip.empty? ? app_identifier : ENV["APP_NAME"]
+def uses_xcodegen?   = boolean_env("USES_XCODEGEN", false)
+
+# Optional embedded extensions (widgets, etc.): comma-separated "TargetName:bundle.id"
+# pairs, e.g. EXTENSION_TARGETS="MyWidgets:com.me.app.MyWidgets". Empty -> app-only,
+# identical to pre-extension behavior. Each extension gets its own match AppStore
+# profile and manual-signing entry alongside the app target.
+def extension_targets
+  ENV["EXTENSION_TARGETS"].to_s.split(",").map(&:strip).reject(&:empty?).map do |pair|
+    t, id = pair.split(":", 2)&.map(&:strip)
+    UI.user_error!("EXTENSION_TARGETS entry '#{pair}' must be TargetName:bundle.id") if t.to_s.empty? || id.to_s.empty?
+    [t, id]
+  end
+end
+
+def all_identifiers = [app_identifier, *extension_targets.map(&:last)]
+
+# Hong Kong is UTC+8 year-round (no DST) — fixed offset is safe on any CI runner.
+HONG_KONG_UTC_OFFSET = "+08:00".freeze
+def hong_kong_now = Time.now.getlocal(HONG_KONG_UTC_OFFSET)
+
+def timestamp_build_number
+  return ENV["BUILD_NUMBER"].strip unless ENV["BUILD_NUMBER"].to_s.strip.empty?
+
+  # CFBundleVersion must be digits/dots only -> YYYYMMDDHHMM. Monotonic and
+  # collision-free across concurrent local/CI builds (no API round-trip needed).
+  hong_kong_now.strftime("%Y%m%d%H%M")
+end
+
+def testflight_changelog
+  stamp = "#{hong_kong_now.strftime('%Y-%m-%d %H:%M')} (HKT)"
+  changelog = ENV["TESTFLIGHT_CHANGELOG"].to_s.strip
+  changelog = sh("git log -1 --pretty=%B", log: false).strip if changelog.empty?
+  changelog.empty? ? stamp : "#{stamp}\n\n#{changelog}"
+end
+
+def app_store_connect_key
+  app_store_connect_api_key(
+    key_id:      required_env("APP_STORE_CONNECT_API_KEY_ID"),
+    issuer_id:   required_env("APP_STORE_CONNECT_API_ISSUER_ID"),
+    key_content: required_env("APP_STORE_CONNECT_API_KEY_BASE64"),
+    is_key_content_base64: true,
+    duration:    1200
+  )
+end
+
+# Signing via the SHARED match repo + the single shared distribution certificate.
+# readonly:false (bootstrap) creates the App Store profile for this bundle id;
+# readonly:true (deploy) just fetches it.
+def sync_appstore_signing(readonly:)
+  match(
+    type:           "appstore",
+    readonly:       readonly,
+    app_identifier: all_identifiers,
+    git_url:        required_env("MATCH_GIT_URL"),
+    git_branch:     ENV.fetch("MATCH_GIT_BRANCH", "main"),
+    team_id:        required_env("DEVELOPER_TEAM_ID"),
+    api_key:        app_store_connect_key
+  )
+end
+
+def app_store_record_exists?(identifier)
+  app_store_connect_key # sets the global Spaceship::ConnectAPI token
+  !Spaceship::ConnectAPI::App.find(identifier).nil?
+end
+
+def regenerate_project
+  sh("cd .. && xcodegen generate") if uses_xcodegen?
+end
+
+# TestFlight groups builds by marketing-version train and sorts trains by semver.
+# A build whose MARKETING_VERSION is LOWER than the highest existing train uploads
+# fine, processes VALID, and even reports IN_BETA_TESTING — but never surfaces on
+# testers' devices (TestFlight buries downgrades below the installed version).
+# Project migrations (e.g. a rewritten project.yml) can silently reset the version,
+# so refuse to ship a downgrade.
+def assert_marketing_version_not_a_downgrade!
+  app = Spaceship::ConnectAPI::App.find(app_identifier)
+  return if app.nil? # no record yet -> nothing to downgrade against
+
+  local = get_version_number(xcodeproj: xcodeproj, target: target_name).to_s.strip
+  UI.user_error!("Could not read MARKETING_VERSION from #{xcodeproj}") if local.empty?
+
+  parse = ->(v) { Gem::Version.new(v) rescue Gem::Version.new("0") }
+  trains = Spaceship::ConnectAPI.get_pre_release_versions(filter: { app: app.id }).map(&:version).compact
+  highest = trains.max_by(&parse)
+  return if highest.nil?
+
+  if parse.call(local) < parse.call(highest)
+    UI.user_error!(
+      "MARKETING_VERSION #{local} is a DOWNGRADE from the highest TestFlight " \
+      "version train #{highest}. TestFlight will accept the upload but never show " \
+      "it to testers. Bump MARKETING_VERSION above #{highest} and redeploy."
+    )
+  end
+  UI.success("Version train OK: #{local} >= highest existing train #{highest}.")
+end
+
+platform :ios do
+  desc "Verify the App Store Connect app record exists"
+  lane :verify_app_store_record do
+    unless app_store_record_exists?(app_identifier)
+      UI.user_error!("No App Store Connect app record for #{app_identifier}. Run `fastlane ios create_app_record` first.")
+    end
+    UI.success("App Store Connect record found for #{app_identifier}.")
+  end
+
+  desc "Register the App ID and create the App Store Connect app record (headless, API-key only)"
+  lane :create_app_record do
+    app_store_connect_key # sets the global Spaceship::ConnectAPI token
+    identifier = app_identifier
+    name = app_name
+
+    bundle = Spaceship::ConnectAPI::BundleId.all.find { |b| b.identifier == identifier }
+    if bundle.nil?
+      bundle = Spaceship::ConnectAPI::BundleId.create(
+        name: name.gsub(/[^A-Za-z0-9 ]/, ""),
+        identifier: identifier,
+        platform: "IOS"
+      )
+      UI.success("Registered App ID #{identifier}")
+    else
+      UI.message("App ID #{identifier} already registered")
+    end
+
+    if Spaceship::ConnectAPI::App.find(identifier)
+      UI.success("App Store Connect record already exists for #{identifier}")
+    else
+      Spaceship::ConnectAPI::App.create(
+        name: name,
+        version_string: "0.1.0",
+        sku: identifier,
+        primary_locale: ENV.fetch("PRIMARY_LOCALE", "en-US"),
+        bundle_id: bundle.id,
+        platforms: ["IOS"]
+      )
+      UI.success("Created App Store Connect record '#{name}' for #{identifier}")
+    end
+  end
+
+  desc "Create or refresh App Store signing assets in the shared match repo (run once per app)"
+  lane :bootstrap_match do
+    # match generates profiles but does NOT register missing bundle ids — extensions
+    # need their App IDs created first (the main app's comes from create_app_record).
+    app_store_connect_key # sets the global Spaceship::ConnectAPI token
+    extension_targets.each do |t, id|
+      if Spaceship::ConnectAPI::BundleId.all(filter: { identifier: id }).none? { |b| b.identifier == id }
+        UI.message("Registering bundle id #{id} on the Developer Portal…")
+        Spaceship::ConnectAPI::BundleId.create(name: "#{app_name} #{t}", identifier: id, platform: "IOS")
+      end
+    end
+    sync_appstore_signing(readonly: false)
+  end
+
+  desc "Build a signed Release archive and upload it to TestFlight"
+  lane :deploy_testflight do
+    setup_ci if is_ci
+    api_key = app_store_connect_key
+
+    unless app_store_record_exists?(app_identifier)
+      UI.user_error!("No App Store Connect app record for #{app_identifier}. Run `fastlane ios create_app_record` first.")
+    end
+
+    regenerate_project
+    assert_marketing_version_not_a_downgrade!
+    sync_appstore_signing(readonly: true)
+
+    profile_name = "match AppStore #{app_identifier}"
+    # One manual-signing pass per target — each needs its own profile name, so the
+    # app and every extension get separate update_code_signing_settings calls.
+    signing_plan = { target_name => profile_name }
+    extension_targets.each { |t, id| signing_plan[t] = "match AppStore #{id}" }
+    signing_plan.each do |tgt, profile|
+      update_code_signing_settings(
+        use_automatic_signing: false,
+        path:                  xcodeproj,
+        targets:               [tgt],
+        team_id:               required_env("DEVELOPER_TEAM_ID"),
+        code_sign_identity:    "Apple Distribution",
+        profile_name:          profile
+      )
+    end
+
+    export_profiles = { app_identifier => profile_name }
+    extension_targets.each { |_t, id| export_profiles[id] = "match AppStore #{id}" }
+
+    build_app(
+      project:          xcodeproj,
+      scheme:           scheme_name,
+      configuration:    "Release",
+      destination:      "generic/platform=iOS",
+      clean:            true,
+      export_method:    "app-store",
+      output_directory: "build/fastlane",
+      output_name:      "#{target_name}.ipa",
+      # Build number via xcargs so the committed project is never mutated. Requires
+      # Info.plist CFBundleVersion = $(CURRENT_PROJECT_VERSION) for non-XcodeGen apps.
+      xcargs:           "CURRENT_PROJECT_VERSION=#{timestamp_build_number}",
+      export_options: {
+        signingStyle: "manual",
+        provisioningProfiles: export_profiles
+      }
+    )
+
+    # Default: skip the processing wait for a fast, reliable upload. Attaching a
+    # changelog requires waiting for the build to appear on ASC (slow + flaky), so we
+    # only do that when TESTFLIGHT_WAIT_FOR_PROCESSING=true.
+    wait = boolean_env("TESTFLIGHT_WAIT_FOR_PROCESSING", false)
+    upload_opts = {
+      api_key:                    api_key,
+      ipa:                        "build/fastlane/#{target_name}.ipa",
+      uses_non_exempt_encryption: false,
+      skip_waiting_for_build_processing: !wait
+    }
+    upload_opts[:changelog] = testflight_changelog if wait
+    upload_to_testflight(**upload_opts)
+  end
+
+  desc "Check the project's MARKETING_VERSION against existing TestFlight version trains"
+  lane :verify_version_train do
+    app_store_connect_key
+    regenerate_project
+    assert_marketing_version_not_a_downgrade!
+  end
+
+  desc "Definition-of-done for an uploaded build: ipa ground truth + VALID + right train + beta-testable"
+  lane :verify_testflight_build do |options|
+    require "json"
+    require "shellwords"
+    app_store_connect_key
+    build_number = (options[:build_number] || ENV["VERIFY_BUILD_NUMBER"]).to_s.strip
+    UI.user_error!("Pass build_number: `fastlane ios verify_testflight_build build_number:YYYYMMDDHHMM`") if build_number.empty?
+
+    # DoD 1 — ipa ground truth, when the ipa from this deploy is still on disk.
+    # Plain-Ruby file access runs with cwd = fastlane/, so anchor to the Fastfile.
+    ipa = File.expand_path("../build/fastlane/#{target_name}.ipa", __dir__)
+    if File.exist?(ipa)
+      plist = `unzip -p #{ipa.shellescape} 'Payload/*.app/Info.plist' | plutil -convert json -o - -- -`
+      info = JSON.parse(plist) rescue {}
+      actual = info["CFBundleVersion"].to_s
+      UI.user_error!("ipa carries CFBundleVersion=#{actual}, expected #{build_number} — the xcargs build number never reached the binary") if actual != build_number
+      UI.success("ipa ground truth OK: CFBundleVersion=#{actual}, v#{info['CFBundleShortVersionString']}")
+    else
+      UI.important("No local ipa at #{ipa} — skipping ground-truth check (fine when verifying an old upload)")
+    end
+
+    app = Spaceship::ConnectAPI::App.find(app_identifier)
+    UI.user_error!("No App Store Connect record for #{app_identifier}") if app.nil?
+
+    # DoD 2 — processing VALID, polled. Server-side filters lie: Build.all(version:)
+    # has returned [] for a build the unfiltered list showed as VALID (2026-07-10).
+    # Always fetch unfiltered and select client-side.
+    parse = ->(v) { Gem::Version.new(v) rescue Gem::Version.new("0") }
+    timeout_min = (options[:timeout_minutes] || 20).to_i
+    build = nil
+    timeout_min.times do |i|
+      builds = Spaceship::ConnectAPI::Build.all(app_id: app.id, includes: "preReleaseVersion")
+      build = builds.find { |b| b.version.to_s == build_number }
+      state = build&.processing_state
+      UI.message("[#{i + 1}/#{timeout_min}] build #{build_number}: #{state || 'not visible yet'}")
+      break if state == "VALID"
+      UI.user_error!("Build #{build_number} failed processing: #{state}") if %w[FAILED INVALID].include?(state.to_s)
+      sleep 60
+    end
+    UI.user_error!("Timed out: build #{build_number} not VALID after #{timeout_min} min") unless build&.processing_state == "VALID"
+
+    # DoD 3 — right version train (a lower train is buried on testers' devices).
+    train = build.pre_release_version&.version.to_s
+    trains = Spaceship::ConnectAPI.get_pre_release_versions(filter: { app: app.id }).map(&:version).compact
+    highest = trains.max_by(&parse).to_s
+    UI.user_error!("Build is on train #{train}, below highest #{highest} — TestFlight will bury it") if parse.call(train) < parse.call(highest)
+
+    # DoD 4 — actually testable, queried by build ID.
+    detail = Spaceship::ConnectAPI.get_build_beta_details(filter: { build: build.id }).first
+    internal = detail&.internal_build_state.to_s
+    UI.user_error!("internalBuildState=#{internal} (want IN_BETA_TESTING)") unless internal == "IN_BETA_TESTING"
+
+    UI.success("DoD PASS: #{build_number} VALID on train #{train} (highest), internal=IN_BETA_TESTING")
+  end
+
+  desc "Alias for deploy_testflight"
+  lane :beta do
+    deploy_testflight
+  end
+end
